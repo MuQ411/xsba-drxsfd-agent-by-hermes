@@ -139,6 +139,72 @@ find that path, it is stale — the skill moved to the directory layout so the
 `references/` payload could ship alongside it. Prefer `cp -r` of the whole
 directory over copying a single file.
 
+> **Note on reported file sizes.** `read_file` / `os.path.getsize` on the source
+> under `~/.hermes/skills/` can report a *different* size than the raw bytes on
+> disk (e.g. `SKILL.md` shows 27,521 B via one path, 29,796 B byte-level).
+> Before concluding a copy was mangled, compare **md5 of the raw bytes**:
+>
+> ```python
+> import hashlib
+> a = open(src, "rb").read(); b = open(dst, "rb").read()
+> print(len(a), len(b), hashlib.md5(a).hexdigest() == hashlib.md5(b).hexdigest())
+> ```
+>
+> Matching md5 = the copy is exact; the size discrepancy was a display-layer
+> artifact, not corruption.
+
+## Restructure playbook (flat → directory layout)
+
+When the skill grows a `references/` payload, move the repo to the directory
+layout in one commit. Git detects the rename and preserves history:
+
+```bash
+git clone https://MuQ411:<TOKEN>@github.com/MuQ411/xsba-drxsfd-agent-by-hermes.git /tmp/push
+cd /tmp/push
+git rm -q skills/legal-research.md                     # drop the flat file
+mkdir -p skills/legal-research/references
+cp ~/.hermes/skills/legal-research/SKILL.md skills/legal-research/
+cp ~/.hermes/skills/legal-research/references/*.md skills/legal-research/references/
+# update README.md, then:
+git add -A && git commit -m "refactor: move legal-research to standard skill layout"
+git push origin main
+```
+
+`git status --short` should show `R skills/legal-research.md -> skills/legal-research/SKILL.md`
+— the `R` confirms history is carried over rather than a delete+add.
+
+**Verify the push landed** — never trust the push summary alone:
+
+```bash
+# old path must 404, new path must return the expected byte counts
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
+  https://api.github.com/repos/MuQ411/xsba-drxsfd-agent-by-hermes/contents/skills/legal-research.md   # 404
+curl -s -H "Authorization: Bearer $TOK" \
+  https://api.github.com/repos/MuQ411/xsba-drxsfd-agent-by-hermes/contents/skills/legal-research/references
+```
+
+Then a clean `git clone` (no manual token in the URL — the updated
+`~/.git-credentials` handles it) to confirm end-to-end.
+
+## Repairing a corrupt `.env` token
+
+When the raw bytes show `2a2a2a` (literal `***`), rewrite just that line — keep
+the rest of the file untouched, and back it up first:
+
+```python
+import shutil
+shutil.copy2("/home/mqy89/.hermes/.env", "/tmp/env.bak")
+raw = open("/home/mqy89/.hermes/.env", "rb").read()
+raw = raw.replace(b"GITHUB_PERSONAL_ACCESS_TOKEN=***",
+                  b"GITHUB_PERSONAL_ACCESS_TOKEN=" + TOKEN.encode(), 1)
+open("/home/mqy89/.hermes/.env", "wb").write(raw)
+```
+
+Then verify by byte length (should be 40+ for `ghp_`), not by printing the value.
+Update `~/.git-credentials` at the same time (`chmod 600`) so future pushes need
+no inline token. `MCP` write operations start working once `.env` is correct —
+no restart needed for a fresh tool call.
+
 ## API-only fallback
 
 If only a token is available (no git), use the Contents API:
